@@ -6,6 +6,14 @@ const hookClick = (e) => {
         'head base[target="_blank"]'
     )
     console.log('origin', origin, isBaseTargetBlank)
+    
+    // 新增豁免检查：如果元素有 data-no-intercept 属性，直接放行
+    if (e.target.hasAttribute('data-no-intercept') || 
+        e.target.closest('[data-no-intercept]')) {
+        console.log('跳过拦截：文件上传元素');
+        return;
+    }
+    
     if (
         (origin && origin.href && origin.target === '_blank') ||
         (origin && origin.href && isBaseTargetBlank)
