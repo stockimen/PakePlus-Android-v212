@@ -1,13 +1,19 @@
 package com.app.pakeplus
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.media.MediaScannerConnection
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.Settings
 import android.util.Log
 import android.view.GestureDetector
 import android.view.MotionEvent
@@ -21,6 +27,7 @@ import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.view.GestureDetectorCompat
 import androidx.core.view.ViewCompat
@@ -28,7 +35,8 @@ import androidx.core.view.WindowInsetsCompat
 import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
@@ -39,23 +47,29 @@ class MainActivity : AppCompatActivity() {
     // 文件上传相关变量
     private var uploadMessage: ValueCallback<Array<Uri>>? = null
     private var filePathCallbackLegacy: ValueCallback<Uri>? = null
-
-    // 拍照相关变量
-    private var cameraImageUri: Uri? = null
-    private var currentPhotoPath: String? = null
-
-    // 文件选择结果处理
     private val fileChooserResultLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         handleFileChooserResult(result.resultCode, result.data)
     }
 
-    // 拍照结果处理
-    private val takePictureLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        handleTakePictureResult(result.resultCode, result.data)
+    // 拍照相关变量
+    private var cameraImageUri: Uri? = null
+    private val takePictureResultLauncher = registerForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { success ->
+        if (success) {
+            cameraImageUri?.let { uri ->
+                // 处理拍照结果
+                handleCameraResult(uri)
+            }
+        } else {
+            // 拍照失败
+            uploadMessage?.onReceiveValue(null)
+            uploadMessage = null
+            filePathCallbackLegacy?.onReceiveValue(null)
+            filePathCallbackLegacy = null
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
@@ -158,6 +172,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.loadUrl("https://juejin.cn/")
+
+        // 检查并申请权限
+        checkAndRequestPermissions()
     }
 
     @Deprecated("Deprecated in Java")
@@ -175,6 +192,132 @@ class MainActivity : AppCompatActivity() {
         if (!sharedPrefs.getBoolean("is_first_run", true)) {
             webView.settings.cacheMode = android.webkit.WebSettings.LOAD_CACHE_ELSE_NETWORK
         }
+    }
+
+    // 需要申请的权限列表
+    private val requiredPermissions = mutableListOf(
+        Manifest.permission.INTERNET,
+        Manifest.permission.ACCESS_NETWORK_STATE,
+        Manifest.permission.ACCESS_WIFI_STATE,
+        Manifest.permission.READ_EXTERNAL_STORAGE,
+        Manifest.permission.CAMERA
+    ).apply {
+        // 添加 Android 10+ 的媒体位置权限
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            add(Manifest.permission.ACCESS_MEDIA_LOCATION)
+        }
+
+        // 添加 Android 11+ 的存储管理权限
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            add(Manifest.permission.MANAGE_EXTERNAL_STORAGE)
+        }
+    }.toTypedArray()
+
+    // 权限请求结果回调
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        handlePermissionResults(permissions)
+    }
+
+    /**
+     * 检查并申请所需权限
+     */
+    private fun checkAndRequestPermissions() {
+        // 检查哪些权限尚未授予
+        val permissionsToRequest = requiredPermissions.filter { permission ->
+            ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED
+        }.toTypedArray()
+
+        if (permissionsToRequest.isNotEmpty()) {
+            // 请求缺失的权限
+            requestPermissionLauncher.launch(permissionsToRequest)
+        } else {
+            // 所有权限已授予，继续应用逻辑
+            onAllPermissionsGranted()
+        }
+    }
+
+    /**
+     * 处理权限请求结果
+     */
+    private fun handlePermissionResults(permissions: Map<String, Boolean>) {
+        val allGranted = permissions.all { it.value }
+
+        if (allGranted) {
+            // 所有权限已授予
+            onAllPermissionsGranted()
+        } else {
+            // 处理未授予的权限
+            handleDeniedPermissions(permissions)
+        }
+    }
+
+    /**
+     * 所有权限已授予
+     */
+    private fun onAllPermissionsGranted() {
+        // 这里可以初始化需要权限的功能
+        Toast.makeText(this, "所有权限已授予", Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * 部分权限已授予
+     */
+    private fun onPermissionsPartiallyGranted() {
+        // 这里可以初始化部分功能
+        Toast.makeText(this, "部分权限已授予", Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * 处理被拒绝的权限
+     */
+    private fun handleDeniedPermissions(permissions: Map<String, Boolean>) {
+        val deniedPermissions = permissions.filter { !it.value }.keys
+
+        // 检查是否有权限被永久拒绝（不再询问）
+        val permanentlyDenied = deniedPermissions.any { permission ->
+            !shouldShowRequestPermissionRationale(permission)
+        }
+
+        if (permanentlyDenied) {
+            // 显示设置对话框引导用户手动开启权限
+            showPermissionSettingsDialog()
+        } else {
+            // 部分权限被拒绝，但可以再次请求
+            Toast.makeText(
+                this,
+                "部分权限被拒绝，功能可能受限",
+                Toast.LENGTH_SHORT
+            ).show()
+
+            // 继续应用逻辑（部分功能可能受限）
+            onPermissionsPartiallyGranted()
+        }
+    }
+
+    /**
+     * 显示引导用户去设置开启权限的对话框
+     */
+    private fun showPermissionSettingsDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("需要权限")
+            .setMessage("部分功能需要权限才能使用，请在设置中开启权限")
+            .setPositiveButton("去设置") { _, _ ->
+                openAppSettings()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    /**
+     * 打开应用设置页面
+     */
+    private fun openAppSettings() {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.fromParts("package", packageName, null)
+        }
+        startActivity(intent)
     }
 
     // 处理文件选择结果
@@ -200,56 +343,37 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 返回结果给WebView
-        returnResultToWebView(results)
+        // 处理新版本API的文件选择回调
+        uploadMessage?.onReceiveValue(results)
+        uploadMessage = null
+
+        // 处理旧版本API的文件选择回调
+        filePathCallbackLegacy?.onReceiveValue(results?.get(0))
+        filePathCallbackLegacy = null
     }
 
     // 处理拍照结果
-    private fun handleTakePictureResult(resultCode: Int, data: Intent?) {
-        Log.d("Camera", "拍照结果: resultCode=$resultCode")
-
-        if (resultCode == RESULT_OK) {
-            // 确保图片URI存在
-            if (cameraImageUri != null) {
-                Log.d("Camera", "拍照成功，URI: $cameraImageUri")
-
-                // 通知媒体库刷新，使图片在相册中可见
-                val mediaScanIntent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
-                mediaScanIntent.data = cameraImageUri
-                sendBroadcast(mediaScanIntent)
-
-                // 直接返回拍照结果给WebView，继续上传流程
-                returnResultToWebView(arrayOf(cameraImageUri!!))
-            } else {
-                Log.e("Camera", "拍照成功但URI为空")
-                returnResultToWebView(null)
-            }
-        } else {
-            // 用户取消了拍照
-            Log.d("Camera", "用户取消拍照")
-            returnResultToWebView(null)
-        }
-    }
-
-    // 返回结果给WebView的统一方法
-    private fun returnResultToWebView(results: Array<Uri>?) {
+    private fun handleCameraResult(uri: Uri) {
         try {
+            // 通知媒体扫描器扫描新文件
+            MediaScannerConnection.scanFile(
+                this,
+                arrayOf(uri.path),
+                arrayOf("image/jpeg"),
+                null
+            )
+
             // 处理新版本API的文件选择回调
-            uploadMessage?.onReceiveValue(results)
+            uploadMessage?.onReceiveValue(arrayOf(uri))
             uploadMessage = null
 
             // 处理旧版本API的文件选择回调
-            filePathCallbackLegacy?.onReceiveValue(results?.getOrNull(0))
+            filePathCallbackLegacy?.onReceiveValue(uri)
             filePathCallbackLegacy = null
-
-            // 重置拍照相关变量
-            cameraImageUri = null
-            currentPhotoPath = null
-
-            Log.d("FileUpload", "结果已返回给WebView: ${results?.size} 个文件")
+            // 自动打开文件选择器
+            openFileSelectorAfterPhotoTaken(uri)
         } catch (e: Exception) {
-            Log.e("FileUpload", "返回结果给WebView失败: ${e.message}")
-            // 确保在异常情况下也清理回调
+            Log.e("CameraResult", "处理拍照结果失败: ${e.message}")
             uploadMessage?.onReceiveValue(null)
             uploadMessage = null
             filePathCallbackLegacy?.onReceiveValue(null)
@@ -257,61 +381,40 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun openFileSelectorAfterPhotoTaken(photoUri: Uri) {
+        val contentSelectionIntent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        }
+
+        // 创建选择器Intent，包含"上传文件"选项
+        val chooserIntent = Intent.createChooser(contentSelectionIntent, "选择文件进行上传")
+
+        try {
+            fileChooserResultLauncher.launch(chooserIntent)
+        } catch (e: Exception) {
+            Toast.makeText(this, "无法打开文件选择器: ${e.message}", Toast.LENGTH_LONG).show()
+            // 错误处理...
+        }
+    }
+
     // 创建图片文件
     @Throws(IOException::class)
     private fun createImageFile(): File {
-        // 创建唯一的文件名
         val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         val imageFileName = "JPEG_${timeStamp}_"
-        val storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES)
 
-        // 确保目录存在
-        storageDir?.mkdirs()
-
+        // 改为保存到公共图片目录
+        val storageDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
         return File.createTempFile(
             imageFileName, /* prefix */
             ".jpg", /* suffix */
             storageDir /* directory */
-        ).apply {
-            currentPhotoPath = absolutePath
-        }
+        )
     }
 
-    // 直接打开相机拍照
-    private fun openCameraDirectly() {
-        try {
-            val takePictureIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-            val photoFile = createImageFile()
-
-            photoFile.let { file ->
-                cameraImageUri = FileProvider.getUriForFile(
-                    this,
-                    "${packageName}.fileprovider",
-                    file
-                )
-
-                takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraImageUri)
-
-                // 确保有应用可以处理相机意图
-                if (takePictureIntent.resolveActivity(packageManager) != null) {
-                    takePictureLauncher.launch(takePictureIntent)
-                } else {
-                    Toast.makeText(this, "未找到相机应用", Toast.LENGTH_SHORT).show()
-                    returnResultToWebView(null)
-                }
-            }
-        } catch (ex: IOException) {
-            Log.e("Camera", "创建图片文件失败", ex)
-            Toast.makeText(this, "创建图片文件失败", Toast.LENGTH_SHORT).show()
-            returnResultToWebView(null)
-        } catch (ex: Exception) {
-            Log.e("Camera", "打开相机失败", ex)
-            Toast.makeText(this, "打开相机失败", Toast.LENGTH_SHORT).show()
-            returnResultToWebView(null)
-        }
-    }
-
-    // 打开文件选择器（包含拍照选项）
+    // 打开文件选择器（添加拍照选项）
     private fun openFileChooser(params: WebChromeClient.FileChooserParams?) {
         // 创建拍照Intent
         val takePictureIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
@@ -322,11 +425,11 @@ class MainActivity : AppCompatActivity() {
             null
         }
 
-        // 设置拍照文件的URI
         photoFile?.let {
+            // 使用FileProvider获取安全的Uri
             cameraImageUri = FileProvider.getUriForFile(
                 this,
-                "${packageName}.fileprovider",
+                "${applicationContext.packageName}.fileprovider",
                 it
             )
             takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraImageUri)
@@ -335,15 +438,12 @@ class MainActivity : AppCompatActivity() {
         // 创建文件选择Intent
         val contentSelectionIntent = Intent(Intent.ACTION_GET_CONTENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            type = "*/*"
+            type = "*/*"  // 允许所有文件类型
 
-            // 使用参数中的设置
+            // 如果指定了MIME类型，使用指定的类型
             params?.let { chooserParams ->
                 if (chooserParams.acceptTypes.isNotEmpty()) {
-                    val acceptType = chooserParams.acceptTypes[0]
-                    if (acceptType.isNotEmpty()) {
-                        type = acceptType
-                    }
+                    type = chooserParams.acceptTypes[0] ?: "*/*"
                 }
 
                 // 是否允许多选
@@ -353,10 +453,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 创建选择器Intent
+        // 创建选择器Intent，包含拍照和文件选择选项
         val chooserIntent = Intent.createChooser(contentSelectionIntent, params?.title ?: "选择文件")
 
-        // 添加拍照选项（如果相机可用）
+        // 添加拍照选项
         if (takePictureIntent.resolveActivity(packageManager) != null) {
             chooserIntent.putExtra(
                 Intent.EXTRA_INITIAL_INTENTS,
@@ -367,9 +467,11 @@ class MainActivity : AppCompatActivity() {
         try {
             fileChooserResultLauncher.launch(chooserIntent)
         } catch (e: Exception) {
-            Log.e("FileChooser", "打开文件选择器失败", e)
-            Toast.makeText(this, "无法打开文件选择器", Toast.LENGTH_SHORT).show()
-            returnResultToWebView(null)
+            Toast.makeText(this, "无法打开文件选择器: ${e.message}", Toast.LENGTH_LONG).show()
+            uploadMessage?.onReceiveValue(null)
+            uploadMessage = null
+            filePathCallbackLegacy?.onReceiveValue(null)
+            filePathCallbackLegacy = null
         }
     }
 
@@ -422,55 +524,28 @@ class MainActivity : AppCompatActivity() {
             filePathCallback: ValueCallback<Array<Uri>>?,
             fileChooserParams: FileChooserParams?
         ): Boolean {
-            Log.d("FileUpload", "onShowFileChooser called")
-
-            // 保存回调
             uploadMessage = filePathCallback
-
-            // 检查是否直接拍照（通过分析accept属性）
-            val acceptTypes = fileChooserParams?.acceptTypes
-            val isCameraPreferred = acceptTypes?.any { type ->
-                type.contains("image/") || type.contains("camera")
-            } == true
-
-            // 如果接受类型主要是图片，优先提供拍照选项
-            if (isCameraPreferred && fileChooserParams?.mode != FileChooserParams.MODE_OPEN_MULTIPLE) {
-                // 直接打开相机
-                openCameraDirectly()
-            } else {
-                // 打开完整的选择器（包含拍照和文件选择）
-                openFileChooser(fileChooserParams)
-            }
-
+            openFileChooser(fileChooserParams)
             return true
         }
 
         // 处理Android 4.1-4.4的文件上传（兼容旧版本）
         @Suppress("DEPRECATION")
         fun openFileChooser(uploadMsg: ValueCallback<Uri>?) {
-            Log.d("FileUpload", "openFileChooser (legacy) called")
             filePathCallbackLegacy = uploadMsg
             openFileChooser(null)
         }
 
         @Suppress("DEPRECATION")
         fun openFileChooser(uploadMsg: ValueCallback<Uri>?, acceptType: String?) {
-            Log.d("FileUpload", "openFileChooser (legacy with accept) called: $acceptType")
             filePathCallbackLegacy = uploadMsg
             openFileChooser(null)
         }
 
         @Suppress("DEPRECATION")
         fun openFileChooser(uploadMsg: ValueCallback<Uri>?, acceptType: String?, capture: String?) {
-            Log.d("FileUpload", "openFileChooser (legacy with capture) called: $acceptType, $capture")
             filePathCallbackLegacy = uploadMsg
-
-            // 如果capture参数存在，表示网页希望直接使用相机
-            if (capture != null) {
-                openCameraDirectly()
-            } else {
-                openFileChooser(null)
-            }
+            openFileChooser(null)
         }
 
         override fun onProgressChanged(view: WebView?, newProgress: Int) {

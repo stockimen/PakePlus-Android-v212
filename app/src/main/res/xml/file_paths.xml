@@ -1,30 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- 外部存储根目录 -->
-    <external-path name="external_files" path="." />
+    <!-- 添加公共目录访问权限 -->
+    <external-path name="external_storage_root" path="." />
+    <external-path name="pictures" path="Pictures" />
     
-    <!-- 外部存储中的文件目录 -->
+    <!-- 保留原有路径 -->
     <external-files-path name="files" path="." />
-    
-    <!-- 外部存储中的缓存目录 -->
     <external-cache-path name="cache" path="." />
-
-    <!-- 外部缓存路径 -->
-    <external-cache-path name="external_cache" path="." />
-    <!-- 内部缓存路径 -->
-    <cache-path name="cache" path="." />
-    <!-- 外部图片路径 -->
-    <external-files-path name="external_images" path="Pictures" />
-    
-    <!-- 外部存储中的图片目录 -->
-    <external-files-path name="images" path="Pictures" />
-    
-    <!-- 外部存储中的视频目录 -->
-    <external-files-path name="videos" path="Movies" />
-    
-    <!-- 外部存储中的下载目录 -->
-    <external-files-path name="downloads" path="Download" />
-    
-    <!-- 相机照片目录 -->
-    <external-files-path name="camera" path="DCIM/Camera" />
+    <cache-path name="internal_cache" path="." />
 </paths>
