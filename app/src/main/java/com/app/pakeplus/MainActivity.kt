@@ -1,11 +1,14 @@
 package com.app.pakeplus
 
 import android.Manifest
+import android.Manifest.permission.WRITE_EXTERNAL_STORAGE
 import android.annotation.SuppressLint
 import android.app.AlertDialog
+import android.content.ContentValues
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.content.pm.PackageManager.PERMISSION_GRANTED
 import android.graphics.Bitmap
 import android.media.MediaScannerConnection
 import android.net.Uri
@@ -26,6 +29,7 @@ import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -51,6 +55,10 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         handleFileChooserResult(result.resultCode, result.data)
+    }
+
+    companion object {
+        private const val REQUEST_CODE_STORAGE = 1001  // 可以是任意唯一整数
     }
 
     // 拍照相关变量
@@ -220,6 +228,19 @@ class MainActivity : AppCompatActivity() {
         handlePermissionResults(permissions)
     }
 
+    private fun checkStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!Environment.isExternalStorageManager()) {
+                val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                startActivity(intent)
+            }
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (checkSelfPermission(WRITE_EXTERNAL_STORAGE) != PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(WRITE_EXTERNAL_STORAGE), REQUEST_CODE_STORAGE)
+            }
+        }
+    }
+
     /**
      * 检查并申请所需权限
      */
@@ -282,7 +303,7 @@ class MainActivity : AppCompatActivity() {
 
         if (permanentlyDenied) {
             // 显示设置对话框引导用户手动开启权限
-            showPermissionSettingsDialog()
+//            showPermissionSettingsDialog()
         } else {
             // 部分权限被拒绝，但可以再次请求
             Toast.makeText(
@@ -403,76 +424,108 @@ class MainActivity : AppCompatActivity() {
     @Throws(IOException::class)
     private fun createImageFile(): File {
         val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-        val imageFileName = "JPEG_${timeStamp}_"
+        val imageFileName = "IMG_${timeStamp}.jpg"
 
-        // 改为保存到公共图片目录
-        val storageDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
-        return File.createTempFile(
-            imageFileName, /* prefix */
-            ".jpg", /* suffix */
-            storageDir /* directory */
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Android 10+ 使用MediaStore保存到DCIM/Camera
+            createImageFileViaMediaStore(imageFileName)
+        } else {
+            // Android 9及以下直接操作文件系统
+            File(getDcimCameraPath(), imageFileName).apply {
+                parentFile?.mkdirs()
+                createNewFile()
+            }
+        }
+    }
+
+    private fun getDcimCameraPath(): File {
+        return File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM),
+            "Camera"
         )
+    }
+
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun createImageFileViaMediaStore(filename: String): File {
+        val contentValues = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, filename)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/Camera")
+        }
+
+        val uri = contentResolver.insert(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            contentValues
+        ) ?: throw IOException("Failed to create MediaStore entry")
+
+        return File(uriToFilePath(uri))
+    }
+
+    private fun uriToFilePath(uri: Uri): String {
+        val cursor = contentResolver.query(uri, arrayOf(MediaStore.Images.Media.DATA), null, null, null)
+        return cursor?.use {
+            it.moveToFirst()
+            it.getString(0)
+        } ?: throw IOException("Cannot resolve file path")
     }
 
     // 打开文件选择器（添加拍照选项）
     private fun openFileChooser(params: WebChromeClient.FileChooserParams?) {
-        // 创建拍照Intent
-        val takePictureIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-        val photoFile: File? = try {
+        // 1. 准备拍照Intent
+        val takePictureIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            flags = Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        }
+
+        val photoFile = try {
             createImageFile()
-        } catch (ex: IOException) {
-            Log.e("FileChooser", "创建图片文件失败", ex)
+        } catch (e: IOException) {
+            Log.e("Camera", "创建文件失败", e)
             null
         }
 
-        photoFile?.let {
-            // 使用FileProvider获取安全的Uri
-            cameraImageUri = FileProvider.getUriForFile(
+        val photoUri = photoFile?.let { file ->
+            FileProvider.getUriForFile(
                 this,
-                "${applicationContext.packageName}.fileprovider",
-                it
+                "${packageName}.fileprovider",
+                file
             )
-            takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraImageUri)
         }
 
-        // 创建文件选择Intent
-        val contentSelectionIntent = Intent(Intent.ACTION_GET_CONTENT).apply {
+        // 2. 准备文件选择Intent
+        val selectFileIntent = Intent(Intent.ACTION_GET_CONTENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            type = "*/*"  // 允许所有文件类型
-
-            // 如果指定了MIME类型，使用指定的类型
-            params?.let { chooserParams ->
-                if (chooserParams.acceptTypes.isNotEmpty()) {
-                    type = chooserParams.acceptTypes[0] ?: "*/*"
-                }
-
-                // 是否允许多选
-                if (chooserParams.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
-                    putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-                }
+            type = params?.acceptTypes?.firstOrNull() ?: "*/*"
+            if (params?.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
+                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
             }
         }
 
-        // 创建选择器Intent，包含拍照和文件选择选项
-        val chooserIntent = Intent.createChooser(contentSelectionIntent, params?.title ?: "选择文件")
-
-        // 添加拍照选项
-        if (takePictureIntent.resolveActivity(packageManager) != null) {
-            chooserIntent.putExtra(
-                Intent.EXTRA_INITIAL_INTENTS,
-                arrayOf(takePictureIntent)
-            )
+        // 3. 创建选择器Intent
+        val chooserIntent = Intent.createChooser(selectFileIntent, params?.title ?: "选择文件").apply {
+            if (photoUri != null && takePictureIntent.resolveActivity(packageManager) != null) {
+                takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, photoUri)
+                putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(takePictureIntent))
+            }
         }
 
+        // 4. 启动Activity
         try {
             fileChooserResultLauncher.launch(chooserIntent)
         } catch (e: Exception) {
-            Toast.makeText(this, "无法打开文件选择器: ${e.message}", Toast.LENGTH_LONG).show()
-            uploadMessage?.onReceiveValue(null)
-            uploadMessage = null
-            filePathCallbackLegacy?.onReceiveValue(null)
-            filePathCallbackLegacy = null
+            handleFileChooserError(e)
         }
+    }
+
+    private fun handleFileChooserError(e: Exception) {
+        Toast.makeText(this, "无法打开选择器: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+        cleanUpCallbacks()
+    }
+
+    private fun cleanUpCallbacks() {
+        uploadMessage?.onReceiveValue(null)
+        uploadMessage = null
+        filePathCallbackLegacy?.onReceiveValue(null)
+        filePathCallbackLegacy = null
     }
 
     inner class MyWebViewClient : WebViewClient() {
