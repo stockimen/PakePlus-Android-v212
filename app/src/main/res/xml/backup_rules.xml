@@ -5,9 +5,20 @@
    Note: This file is ignored for devices older that API 31
    See https://developer.android.com/about/versions/12/backup-restore
 -->
+<!--<full-backup-content>-->
+<!--    &lt;!&ndash;-->
+<!--   <include domain="sharedpref" path="."/>-->
+<!--   <exclude domain="sharedpref" path="device.xml"/>-->
+<!--&ndash;&gt;-->
+<!--</full-backup-content>-->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+<!-- 包含应用数据 -->
+<include domain="file" path="."/>
+<include domain="database" path="."/>
+<include domain="sharedpref" path="."/>
+<include domain="external" path="."/>
+
+<!-- 排除缓存文件 -->
+<exclude domain="external" path="Android/data/com.app.pakeplus/cache"/>
+<exclude domain="external" path="Android/data/com.app.pakeplus/files/Cache"/>
 </full-backup-content>

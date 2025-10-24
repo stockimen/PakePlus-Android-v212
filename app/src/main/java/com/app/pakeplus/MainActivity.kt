@@ -1,27 +1,22 @@
 package com.app.pakeplus
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Bundle
 import android.view.GestureDetector
 import android.view.MotionEvent
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.MimeTypeMap
+import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
-// import android.view.Menu
-// import android.view.WindowInsets
-// import com.google.android.material.snackbar.Snackbar
-// import com.google.android.material.navigation.NavigationView
-// import androidx.navigation.findNavController
-// import androidx.navigation.ui.AppBarConfiguration
-// import androidx.navigation.ui.navigateUp
-// import androidx.navigation.ui.setupActionBarWithNavController
-// import androidx.navigation.ui.setupWithNavController
-// import androidx.drawerlayout.widget.DrawerLayout
-// import com.app.pakeplus.databinding.ActivityMainBinding
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.GestureDetectorCompat
 import androidx.core.view.ViewCompat
@@ -29,11 +24,17 @@ import androidx.core.view.WindowInsetsCompat
 
 class MainActivity : AppCompatActivity() {
 
-//    private lateinit var appBarConfiguration: AppBarConfiguration
-//    private lateinit var binding: ActivityMainBinding
-
     private lateinit var webView: WebView
     private lateinit var gestureDetector: GestureDetectorCompat
+
+    // 文件上传相关变量
+    private var uploadMessage: ValueCallback<Array<Uri>>? = null
+    private var filePathCallbackLegacy: ValueCallback<Uri>? = null
+    private val fileChooserResultLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        handleFileChooserResult(result.resultCode, result.data)
+    }
 
     @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -55,10 +56,14 @@ class MainActivity : AppCompatActivity() {
             javaScriptEnabled = true       // 启用JS
             domStorageEnabled = true       // 启用DOM存储（Vue 需要）
             allowFileAccess = true         // 允许文件访问
+            allowContentAccess = true      // 允许内容访问
+            allowFileAccessFromFileURLs = true  // 允许文件URL访问
+            allowUniversalAccessFromFileURLs = true  // 允许通用文件URL访问
             setSupportMultipleWindows(true)
+            // 启用文件上传
+            loadsImagesAutomatically = true
+            mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
-
-        // webView.settings.userAgentString = ""
 
         webView.settings.loadWithOverviewMode = true
         webView.settings.setSupportZoom(false)
@@ -69,7 +74,7 @@ class MainActivity : AppCompatActivity() {
         // inject js
         webView.webViewClient = MyWebViewClient()
 
-        // get web load progress
+        // get web load progress - 使用修改后的ChromeClient
         webView.webChromeClient = MyChromeClient()
 
         // Setup gesture detector
@@ -115,34 +120,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.loadUrl("https://juejin.cn/")
-        // webView.loadUrl("file:///android_asset/index.html")
-
-//        binding = ActivityMainBinding.inflate(layoutInflater)
-//        setContentView(R.layout.single_main)
-
-//        setSupportActionBar(binding.appBarMain.toolbar)
-
-//        binding.appBarMain.fab.setOnClickListener { view ->
-//            Snackbar.make(view, "Replace with your own action", Snackbar.LENGTH_LONG)
-//                .setAction("Action", null)
-//                .setAnchorView(R.id.fab).show()
-//        }
-
-//        val drawerLayout: DrawerLayout = binding.drawerLayout
-//        val navView: NavigationView = binding.navView
-//        val navController = findNavController(R.id.nav_host_fragment_content_main)
-
-        // Passing each menu ID as a set of Ids because each
-        // menu should be considered as top level destinations.
-//        appBarConfiguration = AppBarConfiguration(
-//            setOf(
-//                R.id.nav_home, R.id.nav_gallery, R.id.nav_slideshow
-//            ), drawerLayout
-//        )
-//        setupActionBarWithNavController(navController, appBarConfiguration)
-//        navView.setupWithNavController(navController)
     }
-
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
@@ -153,16 +131,71 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-//    override fun onCreateOptionsMenu(menu: Menu): Boolean {
-//        // Inflate the menu; this adds items to the action bar if it is present.
-//        menuInflater.inflate(R.menu.main, menu)
-//        return true
-//    }
+    // 处理文件选择结果
+    private fun handleFileChooserResult(resultCode: Int, data: Intent?) {
+        if (uploadMessage == null && filePathCallbackLegacy == null) return
 
-//    override fun onSupportNavigateUp(): Boolean {
-//        val navController = findNavController(R.id.nav_host_fragment_content_main)
-//        return navController.navigateUp(appBarConfiguration) || super.onSupportNavigateUp()
-//    }
+        var results: Array<Uri>? = null
+
+        if (resultCode == RESULT_OK) {
+            if (data != null) {
+                val dataString = data.dataString
+                val clipData = data.clipData
+
+                if (clipData != null) {
+                    // 多文件选择
+                    results = Array(clipData.itemCount) { i ->
+                        clipData.getItemAt(i).uri
+                    }
+                } else if (dataString != null) {
+                    // 单文件选择
+                    results = arrayOf(Uri.parse(dataString))
+                }
+            }
+        }
+
+        // 处理新版本API的文件选择回调
+        uploadMessage?.onReceiveValue(results)
+        uploadMessage = null
+
+        // 处理旧版本API的文件选择回调
+        filePathCallbackLegacy?.onReceiveValue(results?.get(0))
+        filePathCallbackLegacy = null
+    }
+
+    // 打开文件选择器
+    private fun openFileChooser(params: WebChromeClient.FileChooserParams?) {
+        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"  // 允许所有文件类型
+
+            // 如果指定了MIME类型，使用指定的类型
+            params?.let { chooserParams ->
+                if (chooserParams.acceptTypes.isNotEmpty()) {
+                    type = chooserParams.acceptTypes[0] ?: "*/*"
+                }
+
+                // 设置选择标题
+                putExtra(Intent.EXTRA_TITLE, chooserParams.title ?: "选择文件")
+
+                // 是否允许多选
+                if (chooserParams.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
+                    putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                }
+            }
+        }
+
+        try {
+            val chooserIntent = Intent.createChooser(intent, params?.title ?: "选择文件")
+            fileChooserResultLauncher.launch(chooserIntent)
+        } catch (e: Exception) {
+            Toast.makeText(this, "无法打开文件选择器: ${e.message}", Toast.LENGTH_LONG).show()
+            uploadMessage?.onReceiveValue(null)
+            uploadMessage = null
+            filePathCallbackLegacy?.onReceiveValue(null)
+            filePathCallbackLegacy = null
+        }
+    }
 
     inner class MyWebViewClient : WebViewClient() {
 
@@ -206,10 +239,41 @@ class MainActivity : AppCompatActivity() {
     }
 
     inner class MyChromeClient : WebChromeClient() {
+
+        // 处理Android 5.0+的文件上传
+        override fun onShowFileChooser(
+            webView: WebView?,
+            filePathCallback: ValueCallback<Array<Uri>>?,
+            fileChooserParams: FileChooserParams?
+        ): Boolean {
+            uploadMessage = filePathCallback
+            openFileChooser(fileChooserParams)
+            return true
+        }
+
+        // 处理Android 4.1-4.4的文件上传（兼容旧版本）
+        @Suppress("DEPRECATION")
+        fun openFileChooser(uploadMsg: ValueCallback<Uri>?) {
+            filePathCallbackLegacy = uploadMsg
+            openFileChooser(null)
+        }
+
+        @Suppress("DEPRECATION")
+        fun openFileChooser(uploadMsg: ValueCallback<Uri>?, acceptType: String?) {
+            filePathCallbackLegacy = uploadMsg
+            openFileChooser(null)
+        }
+
+        @Suppress("DEPRECATION")
+        fun openFileChooser(uploadMsg: ValueCallback<Uri>?, acceptType: String?, capture: String?) {
+            filePathCallbackLegacy = uploadMsg
+            openFileChooser(null)
+        }
+
         override fun onProgressChanged(view: WebView?, newProgress: Int) {
             super.onProgressChanged(view, newProgress)
             val url = view?.url
-            println("wev view url:$url")
+            println("web view url:$url")
         }
     }
 }

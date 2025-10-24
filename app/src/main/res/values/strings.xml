@@ -11,4 +11,8 @@
     <string name="menu_home">Home</string>
     <string name="menu_gallery">Gallery</string>
     <string name="menu_slideshow">Slideshow</string>
+
+    <string name="choose_file">选择文件</string>
+    <string name="file_not_found">未找到文件管理器</string>
+    <string name="file_chooser_error">无法打开文件选择器</string>
 </resources>

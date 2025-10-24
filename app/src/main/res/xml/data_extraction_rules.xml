@@ -3,17 +3,33 @@
    See https://developer.android.com/about/versions/12/backup-restore#xml-changes
    for details.
 -->
+<!--<data-extraction-rules>-->
+<!--    <cloud-backup>-->
+<!--        &lt;!&ndash; TODO: Use <include> and <exclude> to control what is backed up.-->
+<!--        <include .../>-->
+<!--        <exclude .../>-->
+<!--        &ndash;&gt;-->
+<!--    </cloud-backup>-->
+<!--    &lt;!&ndash;-->
+<!--    <device-transfer>-->
+<!--        <include .../>-->
+<!--        <exclude .../>-->
+<!--    </device-transfer>-->
+<!--    &ndash;&gt;-->
+<!--</data-extraction-rules>-->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <!-- 包含所有文件 -->
+        <include domain="file" path="."/>
+        <include domain="database" path="."/>
+        <include domain="sharedpref" path="."/>
+        <include domain="external" path="."/>
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <!-- 包含所有文件 -->
+        <include domain="file" path="."/>
+        <include domain="database" path="."/>
+        <include domain="sharedpref" path="."/>
+        <include domain="external" path="."/>
     </device-transfer>
-    -->
 </data-extraction-rules>

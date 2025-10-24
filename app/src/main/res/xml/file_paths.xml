@@ -17,4 +17,7 @@
     
     <!-- 外部存储中的下载目录 -->
     <external-files-path name="downloads" path="Download" />
+    
+    <!-- 相机照片目录 -->
+    <external-files-path name="camera" path="DCIM/Camera" />
 </paths>
