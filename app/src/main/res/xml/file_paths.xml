@@ -1,12 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- 允许访问整个外部存储（谨慎使用） -->
-    <external-path name="external_storage_root" path="." />
+    <!-- 外部存储根目录 -->
+    <external-path name="root" path="." />
+    <external-path name="app_moments" path="a_moments" />
+    <external-path name="camera" path="DCIM/Camera/a_moments" />
 
-    <!-- 专门添加DCIM/Camera路径 -->
-    <external-path name="camera" path="DCIM/Camera" />
+    <!-- 内部缓存路径 -->
+    <cache-path name="cache" path="." />
 
-    <!-- 应用专属目录 -->
-    <external-files-path name="private_images" path="Pictures" />
-    <cache-path name="internal_cache" path="." />
+    <!-- 外部存储中的文件目录 -->
+    <external-files-path name="files" path="." />
+    <external-files-path name="external_images" path="Pictures" />
+    <external-files-path name="images" path="Pictures" />
+    <external-cache-path name="cache" path="." />
+    <external-cache-path name="external_cache" path="." />
+
+    <!-- 应用根路径 -->
+    <external-files-path name="videos" path="Movies" />
+    <external-files-path name="downloads" path="Download" />
+    <external-files-path name="camera" path="DCIM/Camera" />
+
+    <files-path name="files" path="." />
 </paths>

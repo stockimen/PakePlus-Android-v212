@@ -4,13 +4,11 @@ import android.Manifest
 import android.Manifest.permission.WRITE_EXTERNAL_STORAGE
 import android.annotation.SuppressLint
 import android.app.AlertDialog
-import android.content.ContentValues
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.content.pm.PackageManager.PERMISSION_GRANTED
 import android.graphics.Bitmap
-import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -29,7 +27,6 @@ import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -61,24 +58,7 @@ class MainActivity : AppCompatActivity() {
         private const val REQUEST_CODE_STORAGE = 1001  // 可以是任意唯一整数
     }
 
-    // 拍照相关变量
-    private var cameraImageUri: Uri? = null
-    private val takePictureResultLauncher = registerForActivityResult(
-        ActivityResultContracts.TakePicture()
-    ) { success ->
-        if (success) {
-            cameraImageUri?.let { uri ->
-                // 处理拍照结果
-                handleCameraResult(uri)
-            }
-        } else {
-            // 拍照失败
-            uploadMessage?.onReceiveValue(null)
-            uploadMessage = null
-            filePathCallbackLegacy?.onReceiveValue(null)
-            filePathCallbackLegacy = null
-        }
-    }
+
 
     @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -120,16 +100,6 @@ class MainActivity : AppCompatActivity() {
 
         webView.settings.loadWithOverviewMode = true
         webView.settings.setSupportZoom(false)
-
-        // 缓存逻辑
-        val isFirstRun = sharedPrefs.getBoolean("is_first_run", true)
-        if (isFirstRun) {
-            webView.clearCache(true)
-            sharedPrefs.edit().putBoolean("is_first_run", false).apply()
-            Toast.makeText(this, "首次运行，缓存已清理", Toast.LENGTH_SHORT).show()
-        } else {
-            webView.settings.cacheMode = android.webkit.WebSettings.LOAD_CACHE_ELSE_NETWORK
-        }
 
         // inject js
         webView.webViewClient = MyWebViewClient()
@@ -179,10 +149,11 @@ class MainActivity : AppCompatActivity() {
             false
         }
 
-        webView.loadUrl("https://juejin.cn/")
-
+//        webView.loadUrl("https://juejin.cn/")
+        webView.loadUrl("https://m.190699.xyz/")
         // 检查并申请权限
         checkAndRequestPermissions()
+        checkStoragePermission()
     }
 
     @Deprecated("Deprecated in Java")
@@ -373,28 +344,19 @@ class MainActivity : AppCompatActivity() {
         filePathCallbackLegacy = null
     }
 
-    // 处理拍照结果
-    private fun handleCameraResult(uri: Uri) {
-        try {
-            // 通知媒体扫描器扫描新文件
-            MediaScannerConnection.scanFile(
-                this,
-                arrayOf(uri.path),
-                arrayOf("image/jpeg"),
-                null
-            )
-
-            // 处理新版本API的文件选择回调
-            uploadMessage?.onReceiveValue(arrayOf(uri))
-            uploadMessage = null
-
-            // 处理旧版本API的文件选择回调
-            filePathCallbackLegacy?.onReceiveValue(uri)
-            filePathCallbackLegacy = null
-            // 自动打开文件选择器
-            openFileSelectorAfterPhotoTaken(uri)
-        } catch (e: Exception) {
-            Log.e("CameraResult", "处理拍照结果失败: ${e.message}")
+    // start 拍照上传 ===============================================================================
+    // 拍照相关变量
+    private var cameraImageUri: Uri? = null
+    private val takePictureResultLauncher = registerForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { success ->
+        if (success) {
+            cameraImageUri?.let { uri ->
+                // 处理拍照结果
+                handleCameraResult(uri)
+            }
+        } else {
+            // 拍照失败
             uploadMessage?.onReceiveValue(null)
             uploadMessage = null
             filePathCallbackLegacy?.onReceiveValue(null)
@@ -402,131 +364,150 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun openFileSelectorAfterPhotoTaken(photoUri: Uri) {
-        val contentSelectionIntent = Intent(Intent.ACTION_GET_CONTENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "*/*"
-            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-        }
-
-        // 创建选择器Intent，包含"上传文件"选项
-        val chooserIntent = Intent.createChooser(contentSelectionIntent, "选择文件进行上传")
-
+    // 处理拍照结果
+    private fun handleCameraResult(uri: Uri) {
         try {
-            fileChooserResultLauncher.launch(chooserIntent)
+            // 只保留新版API回调
+            uploadMessage?.onReceiveValue(arrayOf(uri))
+            uploadMessage = null
         } catch (e: Exception) {
-            Toast.makeText(this, "无法打开文件选择器: ${e.message}", Toast.LENGTH_LONG).show()
-            // 错误处理...
+            Log.e("CameraResult", "处理拍照结果失败: ${e.message}")
+            uploadMessage?.onReceiveValue(null)
+            uploadMessage = null
         }
     }
 
     // 创建图片文件
     @Throws(IOException::class)
     private fun createImageFile(): File {
+        // 创建唯一的文件名
         val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-        val imageFileName = "IMG_${timeStamp}.jpg"
+        val imageFileName = "JPEG_${timeStamp}_"
+//        val storageDir = Environment.getExternalStorageDirectory("a_moments")
 
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Android 10+ 使用MediaStore保存到DCIM/Camera
-            createImageFileViaMediaStore(imageFileName)
-        } else {
-            // Android 9及以下直接操作文件系统
-            File(getDcimCameraPath(), imageFileName).apply {
-                parentFile?.mkdirs()
-                createNewFile()
-            }
-        }
-    }
-
-    private fun getDcimCameraPath(): File {
-        return File(
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM),
-            "Camera"
+        // 获取 /storage/emulated/0/DCIM/Camera 路径
+        val cameraDir = File(
+            Environment.getExternalStorageDirectory(), // 外部存储根目录
+            "a_moments"                             // 配置的子路径
         )
-    }
 
-    @RequiresApi(Build.VERSION_CODES.Q)
-    private fun createImageFileViaMediaStore(filename: String): File {
-        val contentValues = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, filename)
-            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/Camera")
+        // 检查并创建目录
+        if (!cameraDir.exists()) {
+            cameraDir.mkdirs()
         }
 
-        val uri = contentResolver.insert(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            contentValues
-        ) ?: throw IOException("Failed to create MediaStore entry")
+        // 打印路径（调试用）
+        Log.d("CameraPath", "绝对路径: ${cameraDir.absolutePath}")
+        // 输出示例：/storage/emulated/0/DCIM/Camera
 
-        return File(uriToFilePath(uri))
-    }
-
-    private fun uriToFilePath(uri: Uri): String {
-        val cursor = contentResolver.query(uri, arrayOf(MediaStore.Images.Media.DATA), null, null, null)
-        return cursor?.use {
-            it.moveToFirst()
-            it.getString(0)
-        } ?: throw IOException("Cannot resolve file path")
+        return File.createTempFile(
+            imageFileName, /* prefix */
+            ".jpg", /* suffix */
+            cameraDir /* directory */
+        )
     }
 
     // 打开文件选择器（添加拍照选项）
     private fun openFileChooser(params: WebChromeClient.FileChooserParams?) {
-        // 1. 准备拍照Intent
-        val takePictureIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
-            flags = Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-        }
-
-        val photoFile = try {
+        // 创建拍照Intent
+        val takePictureIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        val photoFile: File? = try {
             createImageFile()
-        } catch (e: IOException) {
-            Log.e("Camera", "创建文件失败", e)
+        } catch (ex: IOException) {
+            Log.e("FileChooser", "创建图片文件失败", ex)
             null
         }
 
-        val photoUri = photoFile?.let { file ->
-            FileProvider.getUriForFile(
+        photoFile?.let {
+            // 使用FileProvider获取安全的Uri
+            cameraImageUri = FileProvider.getUriForFile(
                 this,
-                "${packageName}.fileprovider",
-                file
+                "${applicationContext.packageName}.fileprovider",
+                it
+            )
+            takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraImageUri)
+        }
+
+        // 创建文件选择Intent
+        val contentSelectionIntent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"  // 允许所有文件类型
+
+            // 如果指定了MIME类型，使用指定的类型
+            params?.let { chooserParams ->
+                if (chooserParams.acceptTypes.isNotEmpty()) {
+                    type = chooserParams.acceptTypes[0] ?: "*/*"
+                }
+
+                // 是否允许多选
+                if (chooserParams.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
+                    putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                }
+            }
+        }
+
+        // 创建选择器Intent，包含拍照和文件选择选项
+        val chooserIntent = Intent.createChooser(contentSelectionIntent, params?.title ?: "选择文件")
+
+        // 添加拍照选项
+        if (takePictureIntent.resolveActivity(packageManager) != null) {
+            chooserIntent.putExtra(
+                Intent.EXTRA_INITIAL_INTENTS,
+                arrayOf(takePictureIntent)
             )
         }
 
-        // 2. 准备文件选择Intent
-        val selectFileIntent = Intent(Intent.ACTION_GET_CONTENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = params?.acceptTypes?.firstOrNull() ?: "*/*"
-            if (params?.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
-                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-            }
-        }
-
-        // 3. 创建选择器Intent
-        val chooserIntent = Intent.createChooser(selectFileIntent, params?.title ?: "选择文件").apply {
-            if (photoUri != null && takePictureIntent.resolveActivity(packageManager) != null) {
-                takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, photoUri)
-                putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(takePictureIntent))
-            }
-        }
-
-        // 4. 启动Activity
         try {
             fileChooserResultLauncher.launch(chooserIntent)
         } catch (e: Exception) {
-            handleFileChooserError(e)
+            Toast.makeText(this, "无法打开文件选择器: ${e.message}", Toast.LENGTH_LONG).show()
+            uploadMessage?.onReceiveValue(null)
+            uploadMessage = null
+            filePathCallbackLegacy?.onReceiveValue(null)
+            filePathCallbackLegacy = null
         }
     }
 
-    private fun handleFileChooserError(e: Exception) {
-        Toast.makeText(this, "无法打开选择器: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
-        cleanUpCallbacks()
+    inner class MyChromeClient : WebChromeClient() {
+
+        // 处理Android 5.0+的文件上传
+        override fun onShowFileChooser(
+            webView: WebView?,
+            filePathCallback: ValueCallback<Array<Uri>>?,
+            fileChooserParams: FileChooserParams?
+        ): Boolean {
+            uploadMessage = filePathCallback
+            openFileChooser(fileChooserParams)
+            return true
+        }
+
+        // 处理Android 4.1-4.4的文件上传（兼容旧版本）
+        @Suppress("DEPRECATION")
+        fun openFileChooser(uploadMsg: ValueCallback<Uri>?) {
+            filePathCallbackLegacy = uploadMsg
+            openFileChooser(null)
+        }
+
+        @Suppress("DEPRECATION")
+        fun openFileChooser(uploadMsg: ValueCallback<Uri>?, acceptType: String?) {
+            filePathCallbackLegacy = uploadMsg
+            openFileChooser(null)
+        }
+
+        @Suppress("DEPRECATION")
+        fun openFileChooser(uploadMsg: ValueCallback<Uri>?, acceptType: String?, capture: String?) {
+            filePathCallbackLegacy = uploadMsg
+            openFileChooser(null)
+        }
+
+        override fun onProgressChanged(view: WebView?, newProgress: Int) {
+            super.onProgressChanged(view, newProgress)
+            val url = view?.url
+            println("web view url:$url")
+        }
     }
 
-    private fun cleanUpCallbacks() {
-        uploadMessage?.onReceiveValue(null)
-        uploadMessage = null
-        filePathCallbackLegacy?.onReceiveValue(null)
-        filePathCallbackLegacy = null
-    }
+    // end 拍照上传 =================================================================================
 
     inner class MyWebViewClient : WebViewClient() {
 
@@ -569,42 +550,5 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    inner class MyChromeClient : WebChromeClient() {
 
-        // 处理Android 5.0+的文件上传
-        override fun onShowFileChooser(
-            webView: WebView?,
-            filePathCallback: ValueCallback<Array<Uri>>?,
-            fileChooserParams: FileChooserParams?
-        ): Boolean {
-            uploadMessage = filePathCallback
-            openFileChooser(fileChooserParams)
-            return true
-        }
-
-        // 处理Android 4.1-4.4的文件上传（兼容旧版本）
-        @Suppress("DEPRECATION")
-        fun openFileChooser(uploadMsg: ValueCallback<Uri>?) {
-            filePathCallbackLegacy = uploadMsg
-            openFileChooser(null)
-        }
-
-        @Suppress("DEPRECATION")
-        fun openFileChooser(uploadMsg: ValueCallback<Uri>?, acceptType: String?) {
-            filePathCallbackLegacy = uploadMsg
-            openFileChooser(null)
-        }
-
-        @Suppress("DEPRECATION")
-        fun openFileChooser(uploadMsg: ValueCallback<Uri>?, acceptType: String?, capture: String?) {
-            filePathCallbackLegacy = uploadMsg
-            openFileChooser(null)
-        }
-
-        override fun onProgressChanged(view: WebView?, newProgress: Int) {
-            super.onProgressChanged(view, newProgress)
-            val url = view?.url
-            println("web view url:$url")
-        }
-    }
 }
