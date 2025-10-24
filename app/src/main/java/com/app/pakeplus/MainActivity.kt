@@ -2,9 +2,13 @@ package com.app.pakeplus
 
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
+import android.util.Log
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.webkit.ValueCallback
@@ -13,19 +17,25 @@ import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.webkit.MimeTypeMap
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.FileProvider
 import androidx.core.view.GestureDetectorCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import java.io.File
+import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private lateinit var gestureDetector: GestureDetectorCompat
+    private lateinit var sharedPrefs: SharedPreferences
 
     // 文件上传相关变量
     private var uploadMessage: ValueCallback<Array<Uri>>? = null
@@ -34,6 +44,25 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         handleFileChooserResult(result.resultCode, result.data)
+    }
+
+    // 拍照相关变量
+    private var cameraImageUri: Uri? = null
+    private val takePictureResultLauncher = registerForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { success ->
+        if (success) {
+            cameraImageUri?.let { uri ->
+                // 处理拍照结果
+                handleCameraResult(uri)
+            }
+        } else {
+            // 拍照失败
+            uploadMessage?.onReceiveValue(null)
+            uploadMessage = null
+            filePathCallbackLegacy?.onReceiveValue(null)
+            filePathCallbackLegacy = null
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
@@ -50,31 +79,47 @@ class MainActivity : AppCompatActivity() {
             insets
         }
 
+        // 初始化SharedPreferences
+        sharedPrefs = getSharedPreferences("app_prefs", MODE_PRIVATE)
+
         webView = findViewById<WebView>(R.id.webview)
 
         webView.settings.apply {
             javaScriptEnabled = true       // 启用JS
-            domStorageEnabled = true       // 启用DOM存储（Vue 需要）
+            domStorageEnabled = true       // 启用DOM存储
             allowFileAccess = true         // 允许文件访问
             allowContentAccess = true      // 允许内容访问
             allowFileAccessFromFileURLs = true  // 允许文件URL访问
             allowUniversalAccessFromFileURLs = true  // 允许通用文件URL访问
             setSupportMultipleWindows(true)
-            // 启用文件上传
             loadsImagesAutomatically = true
             mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+
+            // 缓存配置
+            databaseEnabled = true
+            cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
+            useWideViewPort = true
+            loadWithOverviewMode = true
+            mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         }
 
         webView.settings.loadWithOverviewMode = true
         webView.settings.setSupportZoom(false)
 
-        // clear cache
-        webView.clearCache(true)
+        // 缓存逻辑
+        val isFirstRun = sharedPrefs.getBoolean("is_first_run", true)
+        if (isFirstRun) {
+            webView.clearCache(true)
+            sharedPrefs.edit().putBoolean("is_first_run", false).apply()
+            Toast.makeText(this, "首次运行，缓存已清理", Toast.LENGTH_SHORT).show()
+        } else {
+            webView.settings.cacheMode = android.webkit.WebSettings.LOAD_CACHE_ELSE_NETWORK
+        }
 
         // inject js
         webView.webViewClient = MyWebViewClient()
 
-        // get web load progress - 使用修改后的ChromeClient
+        // get web load progress
         webView.webChromeClient = MyChromeClient()
 
         // Setup gesture detector
@@ -131,6 +176,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // 应用恢复时恢复缓存设置
+    override fun onResume() {
+        super.onResume()
+        if (!sharedPrefs.getBoolean("is_first_run", true)) {
+            webView.settings.cacheMode = android.webkit.WebSettings.LOAD_CACHE_ELSE_NETWORK
+        }
+    }
+
     // 处理文件选择结果
     private fun handleFileChooserResult(resultCode: Int, data: Intent?) {
         if (uploadMessage == null && filePathCallbackLegacy == null) return
@@ -163,9 +216,62 @@ class MainActivity : AppCompatActivity() {
         filePathCallbackLegacy = null
     }
 
-    // 打开文件选择器
+    // 处理拍照结果
+    private fun handleCameraResult(uri: Uri) {
+        try {
+            // 处理新版本API的文件选择回调
+            uploadMessage?.onReceiveValue(arrayOf(uri))
+            uploadMessage = null
+
+            // 处理旧版本API的文件选择回调
+            filePathCallbackLegacy?.onReceiveValue(uri)
+            filePathCallbackLegacy = null
+        } catch (e: Exception) {
+            Log.e("CameraResult", "处理拍照结果失败: ${e.message}")
+            uploadMessage?.onReceiveValue(null)
+            uploadMessage = null
+            filePathCallbackLegacy?.onReceiveValue(null)
+            filePathCallbackLegacy = null
+        }
+    }
+
+    // 创建图片文件
+    @Throws(IOException::class)
+    private fun createImageFile(): File {
+        // 创建唯一的文件名
+        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        val imageFileName = "JPEG_${timeStamp}_"
+        val storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+        return File.createTempFile(
+            imageFileName, /* prefix */
+            ".jpg", /* suffix */
+            storageDir /* directory */
+        )
+    }
+
+    // 打开文件选择器（添加拍照选项）
     private fun openFileChooser(params: WebChromeClient.FileChooserParams?) {
-        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+        // 创建拍照Intent
+        val takePictureIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        val photoFile: File? = try {
+            createImageFile()
+        } catch (ex: IOException) {
+            Log.e("FileChooser", "创建图片文件失败", ex)
+            null
+        }
+
+        photoFile?.let {
+            // 使用FileProvider获取安全的Uri
+            cameraImageUri = FileProvider.getUriForFile(
+                this,
+                "${applicationContext.packageName}.fileprovider",
+                it
+            )
+            takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraImageUri)
+        }
+
+        // 创建文件选择Intent
+        val contentSelectionIntent = Intent(Intent.ACTION_GET_CONTENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "*/*"  // 允许所有文件类型
 
@@ -175,9 +281,6 @@ class MainActivity : AppCompatActivity() {
                     type = chooserParams.acceptTypes[0] ?: "*/*"
                 }
 
-                // 设置选择标题
-                putExtra(Intent.EXTRA_TITLE, chooserParams.title ?: "选择文件")
-
                 // 是否允许多选
                 if (chooserParams.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
                     putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
@@ -185,8 +288,18 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // 创建选择器Intent，包含拍照和文件选择选项
+        val chooserIntent = Intent.createChooser(contentSelectionIntent, params?.title ?: "选择文件")
+
+        // 添加拍照选项
+        if (takePictureIntent.resolveActivity(packageManager) != null) {
+            chooserIntent.putExtra(
+                Intent.EXTRA_INITIAL_INTENTS,
+                arrayOf(takePictureIntent)
+            )
+        }
+
         try {
-            val chooserIntent = Intent.createChooser(intent, params?.title ?: "选择文件")
             fileChooserResultLauncher.launch(chooserIntent)
         } catch (e: Exception) {
             Toast.makeText(this, "无法打开文件选择器: ${e.message}", Toast.LENGTH_LONG).show()

@@ -8,6 +8,13 @@
     
     <!-- 外部存储中的缓存目录 -->
     <external-cache-path name="cache" path="." />
+
+    <!-- 外部缓存路径 -->
+    <external-cache-path name="external_cache" path="." />
+    <!-- 内部缓存路径 -->
+    <cache-path name="cache" path="." />
+    <!-- 外部图片路径 -->
+    <external-files-path name="external_images" path="Pictures" />
     
     <!-- 外部存储中的图片目录 -->
     <external-files-path name="images" path="Pictures" />
