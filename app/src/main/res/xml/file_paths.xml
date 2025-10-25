@@ -4,6 +4,7 @@
     <external-path name="root" path="." />
     <external-path name="app_moments" path="a_moments" />
     <external-path name="camera" path="DCIM/Camera/a_moments" />
+    <external-path name="downloads" path="Download" />
 
     <!-- 内部缓存路径 -->
     <cache-path name="cache" path="." />

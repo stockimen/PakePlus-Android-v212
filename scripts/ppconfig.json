@@ -10,7 +10,7 @@
     "injectJq": true,
     "tauriApi": false,
     "devbug": true,
-    "version": "2.6.0",
+    "version": "2.7.0",
     "preview": "Android",
     "platform": [
         "1-1"
@@ -143,7 +143,7 @@
     "android": {
         "name": "deafdfeb",
         "showName": "moments",
-        "version": "2.6.0",
+        "version": "2.7.0",
         "webUrl": "https://m.190699.xyz/",
         "id": "com.moments.app.android",
         "icon": "./app-icon.png",

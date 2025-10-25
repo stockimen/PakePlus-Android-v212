@@ -4,8 +4,9 @@ import android.Manifest
 import android.Manifest.permission.WRITE_EXTERNAL_STORAGE
 import android.annotation.SuppressLint
 import android.app.AlertDialog
+import android.app.DownloadManager
 import android.content.Intent
-import android.content.SharedPreferences
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.pm.PackageManager.PERMISSION_GRANTED
 import android.graphics.Bitmap
@@ -18,6 +19,8 @@ import android.provider.Settings
 import android.util.Log
 import android.view.GestureDetector
 import android.view.MotionEvent
+import android.view.View
+import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -39,25 +42,11 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private lateinit var gestureDetector: GestureDetectorCompat
-    private lateinit var sharedPrefs: SharedPreferences
-
-    // 文件上传相关变量
-    private var uploadMessage: ValueCallback<Array<Uri>>? = null
-    private var filePathCallbackLegacy: ValueCallback<Uri>? = null
-    private val fileChooserResultLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        handleFileChooserResult(result.resultCode, result.data)
-    }
-
-    companion object {
-        private const val REQUEST_CODE_STORAGE = 1001  // 可以是任意唯一整数
-    }
-
 
 
     @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
@@ -66,6 +55,7 @@ class MainActivity : AppCompatActivity() {
 
         enableEdgeToEdge()
         setContentView(R.layout.single_main)
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_NOSENSOR); // 固定竖屏
 
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.ConstraintLayout))
         { view, insets ->
@@ -74,9 +64,6 @@ class MainActivity : AppCompatActivity() {
             insets
         }
 
-        // 初始化SharedPreferences
-        sharedPrefs = getSharedPreferences("app_prefs", MODE_PRIVATE)
-
         webView = findViewById<WebView>(R.id.webview)
 
         webView.settings.apply {
@@ -84,8 +71,6 @@ class MainActivity : AppCompatActivity() {
             domStorageEnabled = true       // 启用DOM存储
             allowFileAccess = true         // 允许文件访问
             allowContentAccess = true      // 允许内容访问
-            allowFileAccessFromFileURLs = true  // 允许文件URL访问
-            allowUniversalAccessFromFileURLs = true  // 允许通用文件URL访问
             setSupportMultipleWindows(true)
             loadsImagesAutomatically = true
             mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
@@ -95,7 +80,6 @@ class MainActivity : AppCompatActivity() {
             cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
             useWideViewPort = true
             loadWithOverviewMode = true
-            mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         }
 
         webView.settings.loadWithOverviewMode = true
@@ -149,11 +133,38 @@ class MainActivity : AppCompatActivity() {
             false
         }
 
+        webView.setDownloadListener { url, _, contentDisposition, mimetype, _ ->
+            val fileName = URLUtil.guessFileName(url, contentDisposition, mimetype)
+            Log.d("MainActivity", "下载文件："+url+" "+fileName)
+//            triggerBrowserDownload(url) // 调用上面的下载方法
+            downloadFile(url, fileName)
+        }
+
 //        webView.loadUrl("https://juejin.cn/")
         webView.loadUrl("https://m.190699.xyz/")
         // 检查并申请权限
         checkAndRequestPermissions()
         checkStoragePermission()
+    }
+
+//    private fun triggerBrowserDownload(url: String) {
+//        val intent = Intent(Intent.ACTION_VIEW).apply {
+//            data = Uri.parse(url)
+//            // 明确告诉系统这是下载行为
+//            putExtra(Intent.EXTRA_TEXT, "download")
+//            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+//        }
+//
+//        startActivity(intent)
+//    }
+
+    private fun downloadFile(url: String, fileName: String) {
+        val request = DownloadManager.Request(Uri.parse(url)).apply {
+            setTitle(fileName)
+            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
+            setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+        }
+        (getSystemService(DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
     }
 
     @Deprecated("Deprecated in Java")
@@ -165,14 +176,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 应用恢复时恢复缓存设置
-    override fun onResume() {
-        super.onResume()
-        if (!sharedPrefs.getBoolean("is_first_run", true)) {
-            webView.settings.cacheMode = android.webkit.WebSettings.LOAD_CACHE_ELSE_NETWORK
-        }
-    }
-
+    // region 申请权限
     // 需要申请的权限列表
     private val requiredPermissions = mutableListOf(
         Manifest.permission.INTERNET,
@@ -190,6 +194,11 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             add(Manifest.permission.MANAGE_EXTERNAL_STORAGE)
         }
+
+        // 添加 Android 13+ 的通知权限
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            add(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }.toTypedArray()
 
     // 权限请求结果回调
@@ -199,6 +208,9 @@ class MainActivity : AppCompatActivity() {
         handlePermissionResults(permissions)
     }
 
+    /**
+     * 检查存储权限（特殊处理）
+     */
     private fun checkStoragePermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (!Environment.isExternalStorageManager()) {
@@ -222,14 +234,19 @@ class MainActivity : AppCompatActivity() {
         }.toTypedArray()
 
         if (permissionsToRequest.isNotEmpty()) {
-            // 请求缺失的权限
-            requestPermissionLauncher.launch(permissionsToRequest)
+            // 对于Android 13+的通知权限，可以先解释为什么需要这个权限
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                permissionsToRequest.contains(Manifest.permission.POST_NOTIFICATIONS)) {
+                requestPermissionLauncher.launch(permissionsToRequest)
+            } else {
+                // 直接请求缺失的权限
+                requestPermissionLauncher.launch(permissionsToRequest)
+            }
         } else {
             // 所有权限已授予，继续应用逻辑
             onAllPermissionsGranted()
         }
     }
-
     /**
      * 处理权限请求结果
      */
@@ -343,8 +360,21 @@ class MainActivity : AppCompatActivity() {
         filePathCallbackLegacy?.onReceiveValue(results?.get(0))
         filePathCallbackLegacy = null
     }
+    // endregion
 
-    // start 拍照上传 ===============================================================================
+    // region 拍照上传
+    // 文件上传相关变量
+    private var uploadMessage: ValueCallback<Array<Uri>>? = null
+    private var filePathCallbackLegacy: ValueCallback<Uri>? = null
+    private val fileChooserResultLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        handleFileChooserResult(result.resultCode, result.data)
+    }
+
+    companion object {
+        private const val REQUEST_CODE_STORAGE = 1001  // 可以是任意唯一整数
+    }
     // 拍照相关变量
     private var cameraImageUri: Uri? = null
     private val takePictureResultLauncher = registerForActivityResult(
@@ -481,25 +511,6 @@ class MainActivity : AppCompatActivity() {
             return true
         }
 
-        // 处理Android 4.1-4.4的文件上传（兼容旧版本）
-        @Suppress("DEPRECATION")
-        fun openFileChooser(uploadMsg: ValueCallback<Uri>?) {
-            filePathCallbackLegacy = uploadMsg
-            openFileChooser(null)
-        }
-
-        @Suppress("DEPRECATION")
-        fun openFileChooser(uploadMsg: ValueCallback<Uri>?, acceptType: String?) {
-            filePathCallbackLegacy = uploadMsg
-            openFileChooser(null)
-        }
-
-        @Suppress("DEPRECATION")
-        fun openFileChooser(uploadMsg: ValueCallback<Uri>?, acceptType: String?, capture: String?) {
-            filePathCallbackLegacy = uploadMsg
-            openFileChooser(null)
-        }
-
         override fun onProgressChanged(view: WebView?, newProgress: Int) {
             super.onProgressChanged(view, newProgress)
             val url = view?.url
@@ -507,7 +518,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // end 拍照上传 =================================================================================
+    // endregion 拍照上传
 
     inner class MyWebViewClient : WebViewClient() {
 
@@ -535,6 +546,7 @@ class MainActivity : AppCompatActivity() {
         override fun onPageFinished(view: WebView?, url: String?) {
             super.onPageFinished(view, url)
         }
+
 
         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
             super.onPageStarted(view, url, favicon)
