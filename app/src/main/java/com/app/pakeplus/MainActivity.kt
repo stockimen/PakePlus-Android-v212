@@ -5,7 +5,11 @@ import android.Manifest.permission.WRITE_EXTERNAL_STORAGE
 import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.app.DownloadManager
+import android.content.ActivityNotFoundException
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -20,11 +24,13 @@ import android.util.Log
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
+import android.webkit.CookieManager
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
@@ -36,6 +42,9 @@ import androidx.core.content.FileProvider
 import androidx.core.view.GestureDetectorCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
@@ -133,11 +142,19 @@ class MainActivity : AppCompatActivity() {
             false
         }
 
+        // 下载监听
         webView.setDownloadListener { url, _, contentDisposition, mimetype, _ ->
-            val fileName = URLUtil.guessFileName(url, contentDisposition, mimetype)
-            Log.d("MainActivity", "下载文件："+url+" "+fileName)
-//            triggerBrowserDownload(url) // 调用上面的下载方法
-            downloadFile(url, fileName)
+            var fileName = URLUtil.guessFileName(url, contentDisposition, mimetype)
+            fileName = renameFileName(fileName)
+            Log.d("MainActivity", "下载文件：" + url + " " + fileName)
+
+            // 选择下载方式
+            // 1、选择默认浏览器下载
+            triggerBrowserDownload(url) // 调用上面的下载方法
+            // 2、普通下载
+//            downloadFile(url, fileName)
+            // 3、自定义带有通知的下载
+//            downloadFileWithNotification(url, fileName)
         }
 
 //        webView.loadUrl("https://juejin.cn/")
@@ -147,17 +164,8 @@ class MainActivity : AppCompatActivity() {
         checkStoragePermission()
     }
 
-//    private fun triggerBrowserDownload(url: String) {
-//        val intent = Intent(Intent.ACTION_VIEW).apply {
-//            data = Uri.parse(url)
-//            // 明确告诉系统这是下载行为
-//            putExtra(Intent.EXTRA_TEXT, "download")
-//            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-//        }
-//
-//        startActivity(intent)
-//    }
-
+    // region 下载文件
+    // 普通下载
     private fun downloadFile(url: String, fileName: String) {
         val request = DownloadManager.Request(Uri.parse(url)).apply {
             setTitle(fileName)
@@ -166,6 +174,94 @@ class MainActivity : AppCompatActivity() {
         }
         (getSystemService(DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
     }
+
+    // 带有通知的下载
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    private fun downloadFileWithNotification(url: String, fileName: String) {
+        val request = DownloadManager.Request(Uri.parse(url)).apply {
+            setTitle(fileName)
+            setDescription("正在下载 $fileName")
+            // 关键设置：显示通知栏进度条（下载中和完成都会显示）
+            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            // 可选：设置下载文件类型（影响系统对文件的默认处理方式）
+            setMimeType(getMimeType(fileName))
+            // 保存到系统下载目录（Android 10+ 无需权限）
+            setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+            // 可选：允许在计量网络（如移动数据）下下载
+            setAllowedOverMetered(true)
+        }
+
+        val downloadManager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val downloadId = downloadManager.enqueue(request) // 返回下载ID可用于后续查询进度
+
+        // 可选：监听下载完成事件（通过BroadcastReceiver）
+        registerReceiver(
+            object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
+                    if (id == downloadId) {
+                        Toast.makeText(context, "下载完成", Toast.LENGTH_SHORT).show()
+                        unregisterReceiver(this) // 记得取消注册
+                    }
+                }
+            },
+            IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+        )
+    }
+
+    // 浏览器下载
+    private fun downloadWithBrowser(url: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                // 强制使用浏览器打开（避免被其他应用拦截）
+                setPackage("com.android.chrome") // 可选：指定Chrome，移除则让用户选择
+                addCategory(Intent.CATEGORY_BROWSABLE)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(this, "未找到浏览器应用", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // 选择默认浏览器下载
+    private fun triggerBrowserDownload(url: String) {
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            data = Uri.parse(url)
+            // 明确告诉系统这是下载行为
+            putExtra(Intent.EXTRA_TEXT, "download")
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        startActivity(intent)
+    }
+
+    // 重命名，避免冲突
+    private fun renameFileName(fileName: String): String {
+        val baseName = fileName.substringBeforeLast(".")
+        val extension = fileName.substringAfterLast(".", "")
+        val extensionWithDot = if (extension.isNotEmpty()) ".$extension" else ""
+
+        // 使用时间戳确保文件名唯一
+        val timeStamp = SimpleDateFormat("mmss", Locale.getDefault()).format(Date())
+        val finalFileName = if (extension.isNotEmpty()) {
+            "${baseName}_$timeStamp$extensionWithDot"
+        } else {
+            "${baseName}_$timeStamp"
+        }
+        return finalFileName
+    }
+
+    // 辅助方法：根据文件名猜测MIME类型
+    private fun getMimeType(fileName: String): String {
+        return when (fileName.substringAfterLast(".").lowercase()) {
+            "pdf" -> "application/pdf"
+            "apk" -> "application/vnd.android.package-archive"
+            "jpg", "jpeg" -> "image/jpeg"
+            "png" -> "image/png"
+            else -> "*/*"
+        }
+    }
+    // endregion
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
@@ -236,7 +332,8 @@ class MainActivity : AppCompatActivity() {
         if (permissionsToRequest.isNotEmpty()) {
             // 对于Android 13+的通知权限，可以先解释为什么需要这个权限
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                permissionsToRequest.contains(Manifest.permission.POST_NOTIFICATIONS)) {
+                permissionsToRequest.contains(Manifest.permission.POST_NOTIFICATIONS)
+            ) {
                 requestPermissionLauncher.launch(permissionsToRequest)
             } else {
                 // 直接请求缺失的权限
@@ -247,6 +344,7 @@ class MainActivity : AppCompatActivity() {
             onAllPermissionsGranted()
         }
     }
+
     /**
      * 处理权限请求结果
      */
@@ -375,6 +473,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val REQUEST_CODE_STORAGE = 1001  // 可以是任意唯一整数
     }
+
     // 拍照相关变量
     private var cameraImageUri: Uri? = null
     private val takePictureResultLauncher = registerForActivityResult(
@@ -413,9 +512,8 @@ class MainActivity : AppCompatActivity() {
         // 创建唯一的文件名
         val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         val imageFileName = "JPEG_${timeStamp}_"
-//        val storageDir = Environment.getExternalStorageDirectory("a_moments")
 
-        // 获取 /storage/emulated/0/DCIM/Camera 路径
+        // 获取 /storage/emulated/0/ 路径
         val cameraDir = File(
             Environment.getExternalStorageDirectory(), // 外部存储根目录
             "a_moments"                             // 配置的子路径
@@ -424,11 +522,13 @@ class MainActivity : AppCompatActivity() {
         // 检查并创建目录
         if (!cameraDir.exists()) {
             cameraDir.mkdirs()
+        } else {
+            // 扫描目录并删除0B文件
+            cleanZeroByteFiles(cameraDir)
         }
 
         // 打印路径（调试用）
         Log.d("CameraPath", "绝对路径: ${cameraDir.absolutePath}")
-        // 输出示例：/storage/emulated/0/DCIM/Camera
 
         return File.createTempFile(
             imageFileName, /* prefix */
@@ -437,7 +537,31 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    // 打开文件选择器（添加拍照选项）
+    /**
+     * 删除目录中所有大小为0B的文件
+     */
+    private fun cleanZeroByteFiles(directory: File) {
+        if (directory.isDirectory) {
+            val files = directory.listFiles()
+            files?.forEach { file ->
+                if (file.isFile && file.length() == 0L) {
+                    try {
+                        if (file.delete()) {
+                            Log.d("FileUtils", "已删除0B文件: ${file.name}")
+                        } else {
+                            Log.w("FileUtils", "删除0B文件失败: ${file.name}")
+                        }
+                    } catch (e: SecurityException) {
+                        Log.e("FileUtils", "无权限删除文件: ${file.name}", e)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 打开文件选择器（添加拍照选项）
+     */
     private fun openFileChooser(params: WebChromeClient.FileChooserParams?) {
         // 创建拍照Intent
         val takePictureIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
@@ -477,7 +601,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         // 创建选择器Intent，包含拍照和文件选择选项
-        val chooserIntent = Intent.createChooser(contentSelectionIntent, params?.title ?: "选择文件")
+        val chooserIntent =
+            Intent.createChooser(contentSelectionIntent, params?.title ?: "选择文件")
 
         // 添加拍照选项
         if (takePictureIntent.resolveActivity(packageManager) != null) {
@@ -520,6 +645,73 @@ class MainActivity : AppCompatActivity() {
 
     // endregion 拍照上传
 
+    //region 待完善的自定义下载拦截
+    /*        // 设置能捕获请求的WebViewClient （放在 onCreate()）
+        webView.webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                if (isDownloadRequest(request)) {
+                    handleWebViewDownload(request)
+                    return null // 或返回自定义响应
+                }
+                return super.shouldInterceptRequest(view, request)
+            }
+        }*/
+    private fun isDownloadRequest(request: WebResourceRequest): Boolean {
+        val url = request.url.toString()
+        val headers = request.requestHeaders
+
+        return when {
+            url.contains("download=true") -> true
+            headers["Content-Disposition"]?.contains("attachment") == true -> true
+            listOf(".pdf", ".apk", ".zip").any { url.endsWith(it) } -> true
+            else -> false
+        }
+    }
+
+    private fun handleWebViewDownload(request: WebResourceRequest) {
+        val url = request.url.toString()
+        val headers = request.requestHeaders.toMutableMap()
+
+        // 确保包含Cookie
+        if (!headers.containsKey("Cookie")) {
+            CookieManager.getInstance().getCookie(url)?.let { cookies ->
+                headers["Cookie"] = cookies
+            }
+        }
+
+        // 选择下载方式
+        downloadWithHeaders(url, headers) // 使用DownloadManager
+    }
+
+    private fun downloadWithHeaders(url: String, originalHeaders: Map<String, String>) {
+        val request = DownloadManager.Request(Uri.parse(url)).apply {
+            // 设置通知栏显示
+            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            setTitle("下载文件")
+            setDescription(url.substringAfterLast("/"))
+
+            // 添加原始请求头
+            originalHeaders.forEach { (key, value) ->
+                addRequestHeader(key, value)
+            }
+
+            // 特别处理Cookie
+            val cookies = CookieManager.getInstance().getCookie(url)
+            if (!cookies.isNullOrEmpty()) {
+                addRequestHeader("Cookie", cookies)
+            }
+        }
+
+        // 设置下载路径
+        val fileName = URLUtil.guessFileName(url, null, null)
+        request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+
+        // 开始下载
+        val downloadManager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        downloadManager.enqueue(request)
+    }
+    //endregion
+
     inner class MyWebViewClient : WebViewClient() {
 
         // vConsole debug
@@ -561,6 +753,4 @@ class MainActivity : AppCompatActivity() {
             view?.evaluateJavascript(injectJs, null)
         }
     }
-
-
 }

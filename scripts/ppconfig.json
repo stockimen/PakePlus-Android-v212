@@ -155,7 +155,7 @@
         "desc": "Package for personal use only, please do not use for commercial purposes（打包仅限个人使用，请勿传播或商业用途）",
         "pubBody": "Package for personal use only, please do not use for commercial purposes（打包仅限个人使用，请勿传播或商业用途）",
         "isHtml": false,
-        "debug": true,
+        "debug": false,
         "safeArea": "all"
     },
     "desktop": {
