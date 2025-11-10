@@ -56,6 +56,12 @@ class MainActivity : AppCompatActivity() {
             domStorageEnabled = true       // 启用DOM存储（Vue 需要）
             allowFileAccess = true         // 允许文件访问
             setSupportMultipleWindows(true)
+
+            // 缓存配置
+            cacheMode = WebSettings.LOAD_DEFAULT              // 使用默认缓存模式
+            setAppCacheEnabled(true)                          // 启用应用缓存
+            setAppCachePath(context.cacheDir.absolutePath)   // 设置缓存路径
+            databaseEnabled = true                            // 启用数据库存储
         }
 
         // webView.settings.userAgentString = ""
