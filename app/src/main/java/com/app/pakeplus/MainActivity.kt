@@ -58,9 +58,8 @@ class MainActivity : AppCompatActivity() {
             setSupportMultipleWindows(true)
 
             // 缓存配置
-            cacheMode = WebSettings.LOAD_DEFAULT              // 使用默认缓存模式
-            setAppCacheEnabled(true)                          // 启用应用缓存
-            setAppCachePath(context.cacheDir.absolutePath)   // 设置缓存路径
+            cacheMode = android.webkit.WebSettings.LOAD_DEFAULT              // 使用默认缓存模式
+            mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             databaseEnabled = true                            // 启用数据库存储
         }
 
