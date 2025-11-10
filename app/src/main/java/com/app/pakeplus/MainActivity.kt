@@ -73,46 +73,46 @@ class MainActivity : AppCompatActivity() {
         webView.webChromeClient = MyChromeClient()
 
         // Setup gesture detector
-        gestureDetector =
-            GestureDetectorCompat(this, object : GestureDetector.SimpleOnGestureListener() {
-                override fun onFling(
-                    e1: MotionEvent?,
-                    e2: MotionEvent,
-                    velocityX: Float,
-                    velocityY: Float
-                ): Boolean {
-                    if (e1 == null) return false
+        // gestureDetector =
+        //     GestureDetectorCompat(this, object : GestureDetector.SimpleOnGestureListener() {
+        //         override fun onFling(
+        //             e1: MotionEvent?,
+        //             e2: MotionEvent,
+        //             velocityX: Float,
+        //             velocityY: Float
+        //         ): Boolean {
+        //             if (e1 == null) return false
 
-                    val diffX = e2.x - e1.x
-                    val diffY = e2.y - e1.y
+        //             val diffX = e2.x - e1.x
+        //             val diffY = e2.y - e1.y
 
-                    // Only handle horizontal swipes
-                    if (Math.abs(diffX) > Math.abs(diffY)) {
-                        if (Math.abs(diffX) > 100 && Math.abs(velocityX) > 100) {
-                            if (diffX > 0) {
-                                // Swipe right - go back
-                                if (webView.canGoBack()) {
-                                    webView.goBack()
-                                    return true
-                                }
-                            } else {
-                                // Swipe left - go forward
-                                if (webView.canGoForward()) {
-                                    webView.goForward()
-                                    return true
-                                }
-                            }
-                        }
-                    }
-                    return false
-                }
-            })
+        //             // Only handle horizontal swipes
+        //             if (Math.abs(diffX) > Math.abs(diffY)) {
+        //                 if (Math.abs(diffX) > 100 && Math.abs(velocityX) > 100) {
+        //                     if (diffX > 0) {
+        //                         // Swipe right - go back
+        //                         if (webView.canGoBack()) {
+        //                             webView.goBack()
+        //                             return true
+        //                         }
+        //                     } else {
+        //                         // Swipe left - go forward
+        //                         if (webView.canGoForward()) {
+        //                             webView.goForward()
+        //                             return true
+        //                         }
+        //                     }
+        //                 }
+        //             }
+        //             return false
+        //         }
+        //     })
 
-        // Set touch listener for WebView
-        webView.setOnTouchListener { _, event ->
-            gestureDetector.onTouchEvent(event)
-            false
-        }
+        // // Set touch listener for WebView
+        // webView.setOnTouchListener { _, event ->
+        //     gestureDetector.onTouchEvent(event)
+        //     false
+        // }
 
         webView.loadUrl("https://juejin.cn/")
         // webView.loadUrl("file:///android_asset/index.html")
