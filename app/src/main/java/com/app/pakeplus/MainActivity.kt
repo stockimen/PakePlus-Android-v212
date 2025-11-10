@@ -57,10 +57,14 @@ class MainActivity : AppCompatActivity() {
             allowFileAccess = true         // 允许文件访问
             setSupportMultipleWindows(true)
 
-            // 缓存配置
-            cacheMode = android.webkit.WebSettings.LOAD_DEFAULT              // 使用默认缓存模式
+            loadsImagesAutomatically = true
             mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-            databaseEnabled = true                            // 启用数据库存储
+
+            // 缓存配置
+            databaseEnabled = true
+            cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
+            useWideViewPort = true
+            loadWithOverviewMode = true
         }
 
         // webView.settings.userAgentString = ""
